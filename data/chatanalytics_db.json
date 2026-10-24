@@ -1,0 +1,55 @@
+{
+  "config": {
+    "chatwoot_url": "https://app.chatwoot.com",
+    "account_id": "1",
+    "api_token": "",
+    "connected": false,
+    "last_sync_at": null,
+    "last_sync_count": 0,
+    "last_sync_status": "idle",
+    "inboxes": [
+      {
+        "id": 101,
+        "name": "WhatsApp Ads",
+        "channel_type": "Channel::Whatsapp",
+        "phone_number": "+55 11 98412-4401"
+      },
+      {
+        "id": 102,
+        "name": "Instagram Direct",
+        "channel_type": "Channel::Instagram"
+      },
+      {
+        "id": 103,
+        "name": "Facebook Leads",
+        "channel_type": "Channel::Facebook"
+      },
+      {
+        "id": 104,
+        "name": "Webchat Site",
+        "channel_type": "Channel::WebWidget"
+      },
+      {
+        "id": 105,
+        "name": "API / Google Ads",
+        "channel_type": "Channel::Api"
+      }
+    ],
+    "auto_sync_enabled": true,
+    "auto_sync_interval_minutes": 15,
+    "last_auto_sync_at": null,
+    "ad_spend": 2500,
+    "last_error_message": "Token de API inválido ou sem permissão para esta conta."
+  },
+  "leads": {},
+  "investments": [
+    {
+      "id": "inv_1792879847322_6hxd4",
+      "date": "2026-03-01",
+      "amount": 2500,
+      "channel": "Meta Ads",
+      "notes": "Campanha Institucional Q1",
+      "created_at": "2026-10-24T22:10:47.322Z"
+    }
+  ]
+}

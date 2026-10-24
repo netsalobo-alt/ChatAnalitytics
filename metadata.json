@@ -1,0 +1,6 @@
+{
+  "name": "ChatAnalytics",
+  "description": "Plataforma inteligente de análise de leads e conversões integrada ao Chatwoot para rastreamento de tráfego pago e vendas.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
