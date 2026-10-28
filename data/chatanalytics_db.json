@@ -4,9 +4,9 @@
     "account_id": "1",
     "api_token": "",
     "connected": false,
-    "last_sync_at": null,
-    "last_sync_count": 0,
-    "last_sync_status": "idle",
+    "last_sync_at": "2026-10-25T01:35:58.225Z",
+    "last_sync_count": 1,
+    "last_sync_status": "success",
     "inboxes": [
       {
         "id": 101,
@@ -39,6 +39,7 @@
     "auto_sync_interval_minutes": 15,
     "last_auto_sync_at": null,
     "ad_spend": 2500,
+    "has_master_user": false,
     "last_error_message": "Token de API inválido ou sem permissão para esta conta."
   },
   "leads": {},

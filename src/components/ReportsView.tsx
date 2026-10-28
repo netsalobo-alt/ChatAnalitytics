@@ -11,7 +11,11 @@ import {
   TrendingDown,
   Layers,
   ArrowUpRight,
-  Info
+  Info,
+  X,
+  FileCheck,
+  ExternalLink,
+  Check
 } from 'lucide-react';
 import { AnalyticsSummary, PeriodFilter } from '../types.ts';
 
@@ -28,12 +32,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'financial' | 'efficiency' | 'channels'>('financial');
   const [hoveredMonth, setHoveredMonth] = useState<string | null>(null);
+  const [isPrintModalOpen, setIsPrintModalOpen] = useState(false);
+  const [isDownloadingPdfHtml, setIsDownloadingPdfHtml] = useState(false);
 
   if (!summary) return null;
-
-  const handlePrint = () => {
-    window.print();
-  };
 
   const periodLabelMap: Record<PeriodFilter, string> = {
     today: 'Hoje',
@@ -64,6 +66,271 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     10,
     ...monthlyPerf.map(m => m.leads_count)
   );
+
+  const handlePrint = () => {
+    // Open the Print & PDF Modal for guaranteed execution
+    setIsPrintModalOpen(true);
+    // Also try direct window.print() if allowed by environment
+    try {
+      window.print();
+    } catch (e) {
+      console.warn('Iframe blocked print():', e);
+    }
+  };
+
+  const generateAndDownloadReportHtml = () => {
+    setIsDownloadingPdfHtml(true);
+    try {
+      const nowStr = new Date().toLocaleString('pt-BR', { timeZone: 'America/Belem' });
+      const periodLabel = periodLabelMap[period] || period;
+
+      const htmlContent = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Relatório Executivo Oficial - ChatAnalytics</title>
+  <style>
+    @page { size: A4 portrait; margin: 12mm; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #002139;
+      background: #ffffff;
+      margin: 0;
+      padding: 24px;
+      line-height: 1.4;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .header {
+      border-bottom: 2px solid #002139;
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .badge {
+      display: inline-block;
+      background: #002139;
+      color: #c1ef6d;
+      font-weight: 800;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    h1 {
+      margin: 8px 0 4px 0;
+      font-size: 22px;
+      color: #002139;
+    }
+    .meta { color: #64748b; font-size: 12px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .card {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px;
+      background: #f8fafc;
+    }
+    .card-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: #64748b;
+    }
+    .card-value {
+      font-size: 20px;
+      font-weight: 800;
+      color: #002139;
+      margin-top: 4px;
+    }
+    .card-sub { font-size: 11px; color: #059669; font-weight: 600; margin-top: 2px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 24px;
+      font-size: 12px;
+    }
+    th {
+      background: #f1f5f9;
+      color: #475569;
+      text-align: left;
+      padding: 8px 12px;
+      font-weight: 700;
+      border-bottom: 1px solid #cbd5e1;
+      text-transform: uppercase;
+      font-size: 10px;
+    }
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .text-right { text-align: right; }
+    .font-bold { font-weight: 700; }
+    .footer {
+      border-top: 1px solid #e2e8f0;
+      padding-top: 12px;
+      font-size: 11px;
+      color: #94a3b8;
+      display: flex;
+      justify-content: space-between;
+    }
+    .print-bar {
+      background: #002139;
+      color: #ffffff;
+      padding: 12px 20px;
+      border-radius: 8px;
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .print-btn {
+      background: #c1ef6d;
+      color: #002139;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    @media print {
+      .print-bar { display: none; }
+      body { padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-bar">
+    <div>
+      <strong>Visualização de Impressão Oficial</strong>
+      <div style="font-size: 11px; opacity: 0.85;">Para salvar em PDF, escolha "Salvar como PDF" no destino da impressora.</div>
+    </div>
+    <button class="print-btn" onclick="window.print()">Imprimir / Salvar em PDF</button>
+  </div>
+
+  <div class="header">
+    <div>
+      <span class="badge">ChatAnalytics • Documento Oficial</span>
+      <h1>Relatório Executivo de Performance Comercial & Mídia</h1>
+      <div class="meta">
+        Filtro: <strong>${periodLabel}</strong> • Emitido em: ${nowStr} (Horário Oficial de Belém - America/Belem)
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Leads (trafego_pago)</div>
+      <div class="card-value">${summary.filtered_leads_total.toLocaleString('pt-BR')}</div>
+      <div class="card-sub">Base filtrada</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Clientes Ganhos</div>
+      <div class="card-value" style="color: #059669;">${summary.filtered_leads_converted.toLocaleString('pt-BR')}</div>
+      <div class="card-sub">Taxa: ${summary.filtered_conversion_rate}%</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Investimento em Tráfego</div>
+      <div class="card-value">R$ ${(summary.ad_spend || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+      <div class="card-sub">CPL: R$ ${(summary.cost_per_lead || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">CAC (Custo de Aquisição)</div>
+      <div class="card-value" style="color: #059669;">R$ ${(summary.cac || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+      <div class="card-sub">ROAS: ${summary.roas || 0}x</div>
+    </div>
+  </div>
+
+  <h3 style="font-size: 13px; color: #002139; margin-bottom: 8px;">Consolidação Mensal: Investimento, Leads, CAC e Receita</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Mês</th>
+        <th class="text-right">Investimento (R$)</th>
+        <th class="text-right">Leads</th>
+        <th class="text-right">Ganhos</th>
+        <th class="text-right">Taxa Conv.</th>
+        <th class="text-right">CPL</th>
+        <th class="text-right">CAC</th>
+        <th class="text-right">Receita (R$)</th>
+        <th class="text-right">ROAS</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${summary.monthly_performance.map(m => `
+        <tr>
+          <td class="font-bold">${m.month_label}</td>
+          <td class="text-right">R$ ${m.ad_spend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+          <td class="text-right">${m.leads_count}</td>
+          <td class="text-right font-bold" style="color: #059669;">${m.conversions_count}</td>
+          <td class="text-right">${m.conversion_rate}%</td>
+          <td class="text-right">R$ ${m.cpl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+          <td class="text-right font-bold" style="color: #059669;">R$ ${m.cac.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+          <td class="text-right">R$ ${m.revenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+          <td class="text-right font-bold">${m.roas}x</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+
+  <h3 style="font-size: 13px; color: #002139; margin-bottom: 8px;">Distribuição por Canais de Atendimento</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Canal</th>
+        <th class="text-right">Leads Recebidos</th>
+        <th class="text-right">Convertidos (Ganhamos)</th>
+        <th class="text-right">Taxa Conversão</th>
+        <th class="text-right">Participação</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${summary.channel_distribution.map(ch => `
+        <tr>
+          <td class="font-bold">${ch.channel_detail || ch.channel}</td>
+          <td class="text-right">${ch.leads_received.toLocaleString('pt-BR')}</td>
+          <td class="text-right font-bold" style="color: #059669;">${ch.leads_converted.toLocaleString('pt-BR')}</td>
+          <td class="text-right font-bold" style="color: #059669;">${ch.conversion_rate}%</td>
+          <td class="text-right">${ch.share_percentage}%</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+
+  <div class="footer">
+    <span>ChatAnalytics • Plataforma Integrada de Performance</span>
+    <span>Rastreamento Oficial Chatwoot V3 • tag trafego_pago</span>
+  </div>
+
+  <script>
+    window.addEventListener('DOMContentLoaded', function() {
+      setTimeout(function() { window.print(); }, 400);
+    });
+  </script>
+</body>
+</html>`;
+
+      const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `relatorio_executivo_${period}_${Date.now()}.html`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsDownloadingPdfHtml(false);
+    }
+  };
 
   return (
     <div className="p-4 sm:p-6 md:p-8 space-y-6 max-w-7xl w-full mx-auto print:p-0 print:m-0">
@@ -643,6 +910,110 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
           </table>
         </div>
       </section>
+      {/* Print & PDF Export Modal */}
+      {isPrintModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs print:hidden">
+          <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-slate-100 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="px-6 py-4 bg-[#002139] text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Printer className="w-5 h-5 text-[#c1ef6d]" />
+                <h3 className="font-bold text-base font-['Plus_Jakarta_Sans',sans-serif]">
+                  Imprimir / Salvar em PDF
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsPrintModalOpen(false)}
+                className="text-slate-400 hover:text-white transition-colors cursor-pointer p-1 rounded-lg hover:bg-white/10"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              <div className="p-4 bg-slate-50 border border-slate-200/90 rounded-xl space-y-2">
+                <div className="flex items-center gap-2 text-xs font-bold text-[#002139]">
+                  <FileCheck className="w-4 h-4 text-emerald-600" />
+                  <span>Relatório Consolidado Pronto ({periodLabelMap[period] || period})</span>
+                </div>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  O documento inclui todos os indicadores financeiros, CPL, CAC, faturamento, tabela consolidada mensal e divisão por canais de tráfego.
+                </p>
+              </div>
+
+              {/* Action Cards */}
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  onClick={generateAndDownloadReportHtml}
+                  disabled={isDownloadingPdfHtml}
+                  className="w-full flex items-center justify-between p-4 rounded-xl bg-[#002139] hover:bg-[#00375a] text-white text-left transition-all shadow-md cursor-pointer group active:scale-[0.99]"
+                >
+                  <div className="space-y-0.5">
+                    <span className="text-xs font-extrabold flex items-center gap-1.5 text-white">
+                      <Download className="w-4 h-4 text-[#c1ef6d]" />
+                      Baixar Relatório para Salvar em PDF (Recomendado)
+                    </span>
+                    <span className="text-[11px] text-slate-300 block">
+                      Gera arquivo pronto que aciona o salvamento em PDF automaticamente
+                    </span>
+                  </div>
+                  <ArrowUpRight className="w-4 h-4 text-[#c1ef6d] group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+                </button>
+
+                <a
+                  href={`/api/export/printable-report?period=${period}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full flex items-center justify-between p-4 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-800 text-left transition-all cursor-pointer group"
+                >
+                  <div className="space-y-0.5">
+                    <span className="text-xs font-bold text-[#002139] flex items-center gap-1.5">
+                      <ExternalLink className="w-4 h-4 text-[#1A94C5]" />
+                      Abrir em Nova Aba para Impressão Direta
+                    </span>
+                    <span className="text-[11px] text-slate-500 block">
+                      Abre a visualização limpa do documento sem as restrições do iframe
+                    </span>
+                  </div>
+                  <ArrowUpRight className="w-4 h-4 text-slate-400 group-hover:text-slate-700 transition-colors" />
+                </a>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    try {
+                      window.print();
+                    } catch (e) {
+                      console.warn(e);
+                    }
+                  }}
+                  className="w-full py-2.5 px-4 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Tentar Impressão Direta Nesta Janela</span>
+                </button>
+              </div>
+
+              <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-[11px] text-amber-900 flex items-start gap-2">
+                <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Como salvar em PDF:</strong> Na janela de impressão que se abrir, selecione a opção <strong>"Salvar como PDF"</strong> no campo "Destino" da impressora.
+                </span>
+              </div>
+            </div>
+
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setIsPrintModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 cursor-pointer shadow-2xs"
+              >
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

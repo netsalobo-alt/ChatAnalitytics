@@ -1,6 +1,13 @@
 import fs from 'fs';
 import path from 'path';
-import { ChatwootConfig, LeadRecord, InvestmentRecord } from './types.ts';
+import type { ChatwootConfig, LeadRecord, InvestmentRecord } from './types.ts';
+import { 
+  loadAppDataFromFirestore, 
+  saveAllAppDataToFirestore, 
+  saveConfigToFirestore, 
+  saveInvestmentsToFirestore, 
+  saveLeadsToFirestore 
+} from './firestoreDb.ts';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'chatanalytics_db.json');
@@ -24,7 +31,8 @@ const DEFAULT_CONFIG: ChatwootConfig = {
   auto_sync_interval_minutes: 10,
   last_auto_sync_at: null,
   last_auto_sync_result: undefined,
-  ad_spend: 0
+  ad_spend: 0,
+  has_master_user: false
 };
 
 function ensureDbExists(): DatabaseSchema {
@@ -37,7 +45,6 @@ function ensureDbExists(): DatabaseSchema {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed.leads === 'object') {
-        // If config is missing auto-sync keys, merge default
         parsed.config = { ...DEFAULT_CONFIG, ...(parsed.config || {}) };
         parsed.investments = Array.isArray(parsed.investments) ? parsed.investments : [];
         return parsed;
@@ -54,7 +61,11 @@ function ensureDbExists(): DatabaseSchema {
     investments: []
   };
 
-  fs.writeFileSync(DB_FILE, JSON.stringify(initialDb, null, 2), 'utf-8');
+  try {
+    fs.writeFileSync(DB_FILE, JSON.stringify(initialDb, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Could not write initial db file:', err);
+  }
   return initialDb;
 }
 
@@ -67,12 +78,22 @@ function getDb(): DatabaseSchema {
   return dbCache;
 }
 
-function saveDb(db: DatabaseSchema) {
+function saveDb(db: DatabaseSchema, syncToRemote = true) {
   dbCache = db;
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+  } catch (err) {
+    console.warn('Could not persist database to disk:', err);
   }
-  fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2), 'utf-8');
+
+  if (syncToRemote) {
+    saveAllAppDataToFirestore(db).catch(err => {
+      console.warn('[FirestorePersistence] Erro ao sincronizar com Firestore:', err.message);
+    });
+  }
 }
 
 export function getConfig(): ChatwootConfig {
@@ -103,6 +124,26 @@ export function saveConfig(updates: Partial<ChatwootConfig>): ChatwootConfig {
   return db.config;
 }
 
+export function getMasterStatus() {
+  const config = getConfig();
+  return {
+    has_master_user: Boolean(config.has_master_user),
+    master_user_email: config.master_user_email || undefined
+  };
+}
+
+export function setMasterUser(email: string) {
+  const current = getConfig();
+  if (current.has_master_user) {
+    return { success: false, message: 'Usuário master já definido.' };
+  }
+  saveConfig({
+    has_master_user: true,
+    master_user_email: email
+  });
+  return { success: true, message: 'Usuário master registrado com sucesso.' };
+}
+
 export function getAllLeads(): LeadRecord[] {
   const db = getDb();
   return Object.values(db.leads);
@@ -123,31 +164,61 @@ export function upsertLead(lead: LeadRecord): { lead: LeadRecord; isNew: boolean
   const id = `${lead.account_id}_${lead.conversation_id}`;
   const existing = db.leads[id];
 
-  const hasTrafegoPago = lead.tags.some(t => t.toLowerCase() === 'trafego_pago');
-  const hasGanhamos = lead.tags.some(t => t.toLowerCase() === 'ganhamos');
+  const remoteHasTrafegoPago = lead.tags.some(t => t.toLowerCase() === 'trafego_pago');
+  const remoteHasGanhamos = lead.tags.some(t => t.toLowerCase() === 'ganhamos');
 
-  const isLead = hasTrafegoPago;
-  const isConverted = hasTrafegoPago && hasGanhamos;
+  const isLead = remoteHasTrafegoPago || Boolean(existing?.is_lead);
 
-  let conversionDate = lead.conversion_date;
-  if (isConverted && !conversionDate) {
-    conversionDate = existing?.conversion_date || new Date().toISOString();
+  // CRITICAL: Preserve manual conversion
+  const isLocallyConverted = Boolean(existing && (existing.is_converted || existing.manually_converted || existing.status === 'converted'));
+  const isLocallyUnconverted = Boolean(existing?.manually_unconverted);
+
+  let isConverted = false;
+  if (remoteHasGanhamos) {
+    isConverted = true;
+  } else if (isLocallyConverted && !isLocallyUnconverted) {
+    isConverted = true;
   }
 
-  const status: 'lead' | 'converted' | 'not_converted' = isConverted 
+  // Merge tags preserving Ganhamos
+  const mergedTagsSet = new Set<string>([...lead.tags, ...(existing?.tags || [])]);
+  if (isConverted && !Array.from(mergedTagsSet).some(t => t.toLowerCase() === 'ganhamos')) {
+    mergedTagsSet.add('Ganhamos');
+  } else if (!isConverted && isLocallyUnconverted) {
+    mergedTagsSet.delete('Ganhamos');
+    mergedTagsSet.delete('ganhamos');
+  }
+  const tags = Array.from(mergedTagsSet);
+
+  let conversionDate = isConverted
+    ? (existing?.conversion_date || lead.conversion_date || new Date().toISOString())
+    : undefined;
+
+  let status: 'lead' | 'converted' | 'not_converted' = isConverted 
     ? 'converted' 
-    : (lead.status === 'not_converted' ? 'not_converted' : 'lead');
+    : (lead.status === 'not_converted' || existing?.status === 'not_converted' ? 'not_converted' : 'lead');
+
+  let val = 0;
+  if (lead.value !== undefined && lead.value > 0) {
+    val = Number(lead.value);
+  } else if (existing?.value !== undefined && existing.value > 0) {
+    val = Number(existing.value);
+  }
 
   const record: LeadRecord = {
     ...lead,
     id,
+    tags,
     is_lead: isLead,
     is_converted: isConverted,
     status,
     first_identified_at: existing ? existing.first_identified_at : (lead.first_identified_at || new Date().toISOString()),
-    conversion_date: isConverted ? conversionDate : undefined,
+    conversion_date: conversionDate,
     entry_date: existing ? existing.entry_date : (lead.entry_date || new Date().toISOString()),
-    value: lead.value !== undefined ? Number(lead.value) : (existing?.value || 0)
+    value: val,
+    manually_converted: isLocallyConverted || Boolean(lead.manually_converted),
+    manually_unconverted: isLocallyUnconverted,
+    manual_conversion_at: existing?.manual_conversion_at || lead.manual_conversion_at
   };
 
   db.leads[id] = record;
@@ -176,10 +247,12 @@ export function toggleLeadConversion(leadId: string): LeadRecord | null {
     ...existing,
     tags: newTags,
     is_converted: willBeConverted,
+    manually_converted: willBeConverted,
+    manually_unconverted: !willBeConverted,
+    manual_conversion_at: willBeConverted ? new Date().toISOString() : undefined,
     status: willBeConverted ? 'converted' : 'lead',
     conversion_date: willBeConverted ? (existing.conversion_date || new Date().toISOString()) : undefined,
     value: existing.value || 0
-    // entry_date, id, account_id, conversation_id, first_identified_at remain STRICTLY untouched
   };
 
   db.leads[leadId] = updatedRecord;
@@ -203,7 +276,7 @@ export function updateLeadValue(leadId: string, value: number): LeadRecord | nul
   return updatedRecord;
 }
 
-export function bulkUpsertLeads(leads: LeadRecord[]): { added: number; updated: number } {
+export function bulkUpsertLeads(leads: LeadRecord[]): { added: number; updated: number; totalConverted: number } {
   const db = getDb();
   let added = 0;
   let updated = 0;
@@ -217,29 +290,70 @@ export function bulkUpsertLeads(leads: LeadRecord[]): { added: number; updated: 
       added++;
     }
 
-    const hasTrafegoPago = l.tags.some(t => t.toLowerCase() === 'trafego_pago');
-    const hasGanhamos = l.tags.some(t => t.toLowerCase() === 'ganhamos');
-    const isConverted = hasTrafegoPago && hasGanhamos;
+    const remoteHasTrafegoPago = l.tags.some(t => t.toLowerCase() === 'trafego_pago');
+    const remoteHasGanhamos = l.tags.some(t => t.toLowerCase() === 'ganhamos');
+    const isLead = remoteHasTrafegoPago || Boolean(existing?.is_lead);
+
+    // CRITICAL: Preserve manual conversion across synchronizations!
+    const isLocallyConverted = Boolean(existing && (existing.is_converted || existing.manually_converted || existing.status === 'converted'));
+    const isLocallyUnconverted = Boolean(existing?.manually_unconverted);
+
+    let isConverted = false;
+    if (remoteHasGanhamos) {
+      isConverted = true;
+    } else if (isLocallyConverted && !isLocallyUnconverted) {
+      isConverted = true;
+    }
+
+    const mergedTagsSet = new Set<string>([...l.tags, ...(existing?.tags || [])]);
+    if (isConverted && !Array.from(mergedTagsSet).some(t => t.toLowerCase() === 'ganhamos')) {
+      mergedTagsSet.add('Ganhamos');
+    } else if (!isConverted && isLocallyUnconverted) {
+      mergedTagsSet.delete('Ganhamos');
+      mergedTagsSet.delete('ganhamos');
+    }
+    const tags = Array.from(mergedTagsSet);
+
+    let status: 'lead' | 'converted' | 'not_converted' = isConverted 
+      ? 'converted' 
+      : (l.status === 'not_converted' || existing?.status === 'not_converted' ? 'not_converted' : 'lead');
+
+    const conversionDate = isConverted
+      ? (existing?.conversion_date || l.conversion_date || new Date().toISOString())
+      : undefined;
+
+    let val = 0;
+    if (l.value !== undefined && l.value > 0) {
+      val = Number(l.value);
+    } else if (existing?.value !== undefined && existing.value > 0) {
+      val = Number(existing.value);
+    }
 
     db.leads[id] = {
       ...l,
       id,
-      is_lead: hasTrafegoPago,
+      tags,
+      is_lead: isLead,
       is_converted: isConverted,
-      status: isConverted ? 'converted' : (l.status || 'lead'),
+      status,
       first_identified_at: existing ? existing.first_identified_at : (l.first_identified_at || new Date().toISOString()),
-      conversion_date: isConverted ? (l.conversion_date || existing?.conversion_date || new Date().toISOString()) : undefined,
+      conversion_date: conversionDate,
       entry_date: existing ? existing.entry_date : (l.entry_date || new Date().toISOString()),
-      value: l.value !== undefined ? Number(l.value) : (existing?.value || 0)
+      value: val,
+      manually_converted: isLocallyConverted || Boolean(l.manually_converted),
+      manually_unconverted: isLocallyUnconverted,
+      manual_conversion_at: existing?.manual_conversion_at || l.manual_conversion_at
     };
   }
+
+  const totalConverted = Object.values(db.leads).filter(l => l.is_converted).length;
 
   db.config.last_sync_at = new Date().toISOString();
   db.config.last_sync_count = Object.keys(db.leads).length;
   db.config.last_sync_status = 'success';
 
   saveDb(db);
-  return { added, updated };
+  return { added, updated, totalConverted };
 }
 
 export function clearDatabase(): void {
@@ -324,5 +438,122 @@ export function deleteInvestment(id: string): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Initializes persistent storage from Firestore to prevent data loss across Cloud Run container scale-downs and restarts.
+ */
+export async function initPersistentStorage(): Promise<void> {
+  const db = getDb();
+  try {
+    const remote = await loadAppDataFromFirestore();
+    if (remote) {
+      if (remote.config && Object.keys(remote.config).length > 0) {
+        db.config = {
+          ...DEFAULT_CONFIG,
+          ...db.config,
+          ...remote.config,
+          // Preserve boolean states
+          connected: Boolean(remote.config.connected ?? db.config.connected)
+        };
+      }
+      if (remote.investments && Array.isArray(remote.investments) && remote.investments.length > 0) {
+        db.investments = remote.investments;
+      }
+      if (remote.leads && typeof remote.leads === 'object' && Object.keys(remote.leads).length > 0) {
+        db.leads = { ...db.leads, ...remote.leads };
+      }
+      // Save merged data to local cache file without re-triggering remote upload
+      saveDb(db, false);
+      console.log(`[Storage] Armazenamento persistente carregado com sucesso do Firestore: ${Object.keys(db.leads).length} leads, ${(db.investments || []).length} aportes.`);
+    } else {
+      // First boot with Firestore: if local disk has data, upload to Firestore
+      if (db.config.api_token || Object.keys(db.leads).length > 0 || (db.investments || []).length > 0) {
+        await saveAllAppDataToFirestore(db);
+        console.log('[Storage] Dados locais sincronizados com o Firestore pela primeira vez.');
+      }
+    }
+  } catch (err: any) {
+    console.warn('[Storage] Falha ao sincronizar dados persistentes do Firestore:', err.message);
+  }
+}
+
+export interface BackupData {
+  version: string;
+  exported_at: string;
+  system: string;
+  config: ChatwootConfig;
+  leads_count: number;
+  leads: Record<string, LeadRecord>;
+  investments_count: number;
+  investments: InvestmentRecord[];
+}
+
+export function generateBackup(): BackupData {
+  const db = getDb();
+  return {
+    version: '1.0',
+    exported_at: new Date().toISOString(),
+    system: 'ChatAnalytics',
+    config: {
+      ...db.config
+    },
+    leads_count: Object.keys(db.leads).length,
+    leads: db.leads,
+    investments_count: (db.investments || []).length,
+    investments: db.investments || []
+  };
+}
+
+export async function restoreBackup(backup: any): Promise<{
+  success: boolean;
+  message: string;
+  leads_restored: number;
+  investments_restored: number;
+  config: ChatwootConfig;
+}> {
+  if (!backup || typeof backup !== 'object') {
+    throw new Error('Arquivo de backup inválido ou ilegível.');
+  }
+
+  const db = getDb();
+
+  // 1. Restore Config if present
+  if (backup.config && typeof backup.config === 'object') {
+    const rawCfg = backup.config;
+    db.config = {
+      ...DEFAULT_CONFIG,
+      ...db.config,
+      ...rawCfg,
+      connected: Boolean(rawCfg.connected)
+    };
+  }
+
+  // 2. Restore Leads if present
+  let leadsCount = 0;
+  if (backup.leads && typeof backup.leads === 'object') {
+    db.leads = { ...db.leads, ...backup.leads };
+    leadsCount = Object.keys(db.leads).length;
+    db.config.last_sync_count = leadsCount;
+  }
+
+  // 3. Restore Investments if present
+  let investmentsCount = 0;
+  if (Array.isArray(backup.investments)) {
+    db.investments = backup.investments;
+    investmentsCount = db.investments.length;
+  }
+
+  // Persist locally and to Firestore immediately
+  saveDb(db, false);
+  await saveAllAppDataToFirestore(db);
+
+  return {
+    success: true,
+    message: `Backup restaurado com sucesso! ${leadsCount} leads e ${investmentsCount} lançamentos de tráfego recuperados.`,
+    leads_restored: leadsCount,
+    investments_restored: investmentsCount,
+    config: db.config
+  };
 }
 

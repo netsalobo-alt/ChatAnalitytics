@@ -9,11 +9,13 @@ import {
   Download, 
   RefreshCw,
   Wallet,
+  UserCheck,
+  LogOut,
   X
 } from 'lucide-react';
-import { ChatwootConfig } from '../types.ts';
+import { ChatwootConfig, AppUser } from '../types.ts';
 
-export type NavTab = 'dashboard' | 'leads' | 'conversions' | 'investments' | 'channels' | 'reports' | 'settings';
+export type NavTab = 'dashboard' | 'leads' | 'conversions' | 'investments' | 'channels' | 'reports' | 'users' | 'settings';
 
 interface SidebarProps {
   currentTab: NavTab;
@@ -25,6 +27,8 @@ interface SidebarProps {
   isSyncing: boolean;
   isOpenMobile?: boolean;
   onCloseMobile?: () => void;
+  currentUser?: AppUser | null;
+  onLogout?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -36,7 +40,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onQuickSync,
   isSyncing,
   isOpenMobile,
-  onCloseMobile
+  onCloseMobile,
+  currentUser,
+  onLogout
 }) => {
   const formatSyncTime = (dateStr?: string | null) => {
     if (!dateStr) return 'Nunca';
@@ -78,6 +84,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'reports', 
       label: 'Relatórios', 
       icon: <FileText className="w-5 h-5" /> 
+    },
+    { 
+      id: 'users', 
+      label: 'Usuários', 
+      icon: <UserCheck className="w-5 h-5" /> 
     },
     { 
       id: 'settings', 
@@ -211,11 +222,40 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* Export Data Button */}
         <button
           onClick={onExportCsv}
-          className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg bg-white/10 hover:bg-white/15 text-white text-xs font-semibold transition-all border border-white/10 active:scale-[0.98] cursor-pointer"
+          className="w-full flex items-center justify-center gap-2 py-2 px-3 rounded-lg bg-white/10 hover:bg-white/15 text-white text-xs font-semibold transition-all border border-white/10 active:scale-[0.98] cursor-pointer"
         >
           <Download className="w-4 h-4 text-[#c1ef6d]" />
           <span>Exportar Dados</span>
         </button>
+
+        {/* Current Logged User Profile & Logout */}
+        {currentUser && (
+          <div className="pt-2 border-t border-[#00375a]/70 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-full bg-[#1A94C5] text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-xs">
+                {(currentUser.name || currentUser.email || 'U').slice(0, 2).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold text-white truncate" title={currentUser.name}>
+                  {currentUser.name}
+                </p>
+                <p className="text-[10px] text-slate-300 truncate" title={currentUser.email}>
+                  {currentUser.email}
+                </p>
+              </div>
+            </div>
+
+            {onLogout && (
+              <button
+                onClick={onLogout}
+                title="Sair do sistema"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </aside>
     </>

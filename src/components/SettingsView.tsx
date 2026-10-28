@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   Settings, 
   Key, 
@@ -19,7 +19,13 @@ import {
   DollarSign,
   TrendingUp,
   Tag,
-  CheckCircle2
+  CheckCircle2,
+  Download,
+  Upload,
+  FileJson,
+  ShieldCheck,
+  HardDrive,
+  Cloud
 } from 'lucide-react';
 import { ChatwootConfig } from '../types.ts';
 
@@ -32,6 +38,7 @@ interface SettingsViewProps {
   onClearDb: () => Promise<void>;
   onUpdateAutoSync: (enabled?: boolean, intervalMinutes?: number, triggerNow?: boolean) => Promise<any>;
   onUpdateAdSpend?: (amount: number) => Promise<void>;
+  onBackupRestored?: (message: string) => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
@@ -42,7 +49,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   isSyncing,
   onClearDb,
   onUpdateAutoSync,
-  onUpdateAdSpend
+  onUpdateAdSpend,
+  onBackupRestored
 }) => {
   const [url, setUrl] = useState(config?.chatwoot_url || 'https://app.chatwoot.com');
   const [accountId, setAccountId] = useState(config?.account_id || '1');
@@ -52,6 +60,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [copiedWebhook, setCopiedWebhook] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+
+  // Backup & Restore State
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isExportingBackup, setIsExportingBackup] = useState(false);
+  const [isRestoringBackup, setIsRestoringBackup] = useState(false);
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
+  const [backupFileName, setBackupFileName] = useState('');
+  const [backupSuccessMessage, setBackupSuccessMessage] = useState<string | null>(null);
+  const [backupErrorMessage, setBackupErrorMessage] = useState<string | null>(null);
+  const [backupPreview, setBackupPreview] = useState<{
+    exportedAt: string;
+    version: string;
+    chatwootUrl: string;
+    accountId: string;
+    hasToken: boolean;
+    totalLeads: number;
+    convertedLeads: number;
+    totalInvestments: number;
+    rawPayload: any;
+  } | null>(null);
 
   // Auto-Sync local controls
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(config?.auto_sync_enabled ?? true);
@@ -122,6 +150,107 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       navigator.clipboard.writeText(config.webhook_url);
       setCopiedWebhook(true);
       setTimeout(() => setCopiedWebhook(false), 2000);
+    }
+  };
+
+  const handleExportBackup = async () => {
+    setIsExportingBackup(true);
+    setBackupSuccessMessage(null);
+    setBackupErrorMessage(null);
+    try {
+      const res = await fetch('/api/backup/export');
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || 'Falha ao gerar arquivo de backup');
+      }
+      const blob = await res.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      const now = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+      a.download = `chatanalytics-backup-${now}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+      setBackupSuccessMessage('Backup exportado com sucesso! Arquivo .json baixado para o seu computador.');
+      setTimeout(() => setBackupSuccessMessage(null), 5000);
+    } catch (err: any) {
+      setBackupErrorMessage(err.message || 'Erro ao exportar backup');
+      setTimeout(() => setBackupErrorMessage(null), 5000);
+    } finally {
+      setIsExportingBackup(false);
+    }
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setBackupFileName(file.name);
+    setBackupErrorMessage(null);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const content = event.target?.result as string;
+        const parsed = JSON.parse(content);
+        if (!parsed || (!parsed.config && !parsed.leads)) {
+          throw new Error('Arquivo de backup inválido: não contém estrutura reconhecida do ChatAnalytics.');
+        }
+        setBackupPreview({
+          exportedAt: parsed.exported_at || parsed.created_at || 'Data não identificada',
+          version: parsed.app_version || '1.0.0',
+          chatwootUrl: parsed.config?.chatwoot_url || 'Não configurado',
+          accountId: parsed.config?.account_id || 'Não informado',
+          hasToken: !!parsed.config?.api_token,
+          totalLeads: Array.isArray(parsed.leads) ? parsed.leads.length : 0,
+          convertedLeads: Array.isArray(parsed.leads) ? parsed.leads.filter((l: any) => l.is_converted).length : 0,
+          totalInvestments: Array.isArray(parsed.investments) ? parsed.investments.length : 0,
+          rawPayload: parsed
+        });
+        setIsRestoreModalOpen(true);
+      } catch (err: any) {
+        setBackupErrorMessage(err.message || 'Erro ao processar arquivo JSON');
+        setTimeout(() => setBackupErrorMessage(null), 6000);
+      }
+    };
+    reader.onerror = () => {
+      setBackupErrorMessage('Falha ao ler o arquivo selecionado.');
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const handleConfirmRestore = async () => {
+    if (!backupPreview?.rawPayload) return;
+    setIsRestoringBackup(true);
+    setBackupErrorMessage(null);
+    try {
+      const res = await fetch('/api/backup/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backup: backupPreview.rawPayload })
+      });
+      const json = await res.json();
+      if (json.success) {
+        setIsRestoreModalOpen(false);
+        setBackupSuccessMessage(json.message || 'Backup restaurado e sincronizado com sucesso!');
+        setTimeout(() => setBackupSuccessMessage(null), 6000);
+        if (onBackupRestored) {
+          onBackupRestored(json.message);
+        }
+        if (backupPreview.rawPayload.config?.chatwoot_url) {
+          setUrl(backupPreview.rawPayload.config.chatwoot_url);
+        }
+        if (backupPreview.rawPayload.config?.account_id) {
+          setAccountId(backupPreview.rawPayload.config.account_id);
+        }
+      } else {
+        throw new Error(json.error || json.message || 'Falha ao restaurar backup');
+      }
+    } catch (err: any) {
+      setBackupErrorMessage(err.message || 'Erro ao restaurar backup');
+    } finally {
+      setIsRestoringBackup(false);
     }
   };
 
@@ -591,6 +720,111 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </section>
 
+      {/* Gerador de Backup & Migração de Dados */}
+      <section className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-100 pb-4">
+          <div>
+            <h3 className="text-sm font-bold text-[#002139] flex items-center gap-2">
+              <HardDrive className="w-4 h-4 text-[#1A94C5]" />
+              Gerador de Backup & Restauração de Dados
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Exporte ou restaure suas configurações completas, token da API, leads, conversões manuais e investimentos em tráfego.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-blue-50 border border-blue-200/80 text-blue-900 text-xs font-semibold w-fit">
+            <Cloud className="w-3.5 h-3.5 text-blue-600 animate-pulse" />
+            <span>Persistência Ativa (Firestore)</span>
+          </div>
+        </div>
+
+        {/* Informative banner about Cloud Run and persistence */}
+        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/70 text-xs text-slate-600 flex items-start gap-2.5">
+          <ShieldCheck className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+          <div className="space-y-1">
+            <p className="font-semibold text-slate-800">
+              Proteção contra perda de dados no Google Cloud Run:
+            </p>
+            <p>
+              O ChatAnalytics agora sincroniza automaticamente todas as configurações e registros com o <strong>Google Cloud Firestore</strong>. Mesmo quando o container suspende ou é recriado após inatividade, seus dados são recarregados na inicialização.
+            </p>
+            <p className="text-slate-500">
+              Utilize o botão de <strong>Exportar Backup</strong> para salvar uma cópia offline com todas as credenciais em formato <span className="font-mono font-semibold">.json</span> e restaurá-la com 1 clique sempre que necessário.
+            </p>
+          </div>
+        </div>
+
+        {/* Action feedback notifications */}
+        {backupSuccessMessage && (
+          <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 flex items-center gap-2">
+            <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{backupSuccessMessage}</span>
+          </div>
+        )}
+        {backupErrorMessage && (
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-800 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{backupErrorMessage}</span>
+          </div>
+        )}
+
+        {/* Action Buttons */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+          {/* Export Card */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white hover:border-slate-300 transition-all flex flex-col justify-between space-y-3">
+            <div>
+              <div className="flex items-center gap-2 text-slate-800 font-bold text-xs">
+                <FileJson className="w-4 h-4 text-[#00375a]" />
+                <span>Exportar Backup Completo</span>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">
+                Gera um arquivo <span className="font-mono font-semibold text-slate-700">.json</span> com a URL do Chatwoot, Token de API, canais, lista completa de leads e histórico de investimentos.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleExportBackup}
+              disabled={isExportingBackup}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#00375a] hover:bg-[#002139] text-white text-xs font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50"
+            >
+              <Download className={`w-3.5 h-3.5 text-[#c1ef6d] ${isExportingBackup ? 'animate-bounce' : ''}`} />
+              <span>{isExportingBackup ? 'Gerando Backup...' : 'Baixar Arquivo de Backup (.json)'}</span>
+            </button>
+          </div>
+
+          {/* Import Card */}
+          <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white hover:border-slate-300 transition-all flex flex-col justify-between space-y-3">
+            <div>
+              <div className="flex items-center gap-2 text-slate-800 font-bold text-xs">
+                <Upload className="w-4 h-4 text-[#1A94C5]" />
+                <span>Restaurar / Importar Backup</span>
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">
+                Selecione um arquivo de backup previamente exportado para recuperar todas as integrações e banco de dados instantaneamente.
+              </p>
+            </div>
+            <div>
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept=".json,application/json"
+                onChange={handleFileSelect}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isRestoringBackup}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-bold transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+              >
+                <Upload className="w-3.5 h-3.5 text-[#1A94C5]" />
+                <span>Selecionar Arquivo para Restaurar</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Webhook Configuration for Continuous Real-Time Updates */}
       <section className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-xs space-y-4">
         <h3 className="text-sm font-bold text-[#002139] flex items-center gap-2 border-b border-slate-100 pb-3">
@@ -649,6 +883,97 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <li><strong>Receita Real:</strong> Obtida de atributos personalizados (<span className="font-mono">valor</span>, <span className="font-mono">deal_value</span>) ou informada pelo usuário, sem dados inventados.</li>
         </ul>
       </section>
+
+      {/* Modal de Confirmação de Restauração */}
+      {isRestoreModalOpen && backupPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 text-[#1A94C5] flex items-center justify-center font-bold">
+                  <FileJson className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-base font-bold text-[#002139]">Confirmar Restauração de Backup</h4>
+                  <p className="text-xs text-slate-500 truncate max-w-[280px]">{backupFileName}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsRestoreModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 text-sm font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs">
+              <p className="text-slate-600">
+                O arquivo de backup foi validado. Confira os dados que serão restaurados no sistema:
+              </p>
+
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200/80 space-y-2">
+                <div className="flex justify-between items-center py-1 border-b border-slate-200/50">
+                  <span className="text-slate-500">Data do Backup:</span>
+                  <span className="font-semibold text-slate-800">
+                    {backupPreview.exportedAt !== 'Data não identificada' 
+                      ? new Date(backupPreview.exportedAt).toLocaleString('pt-BR') 
+                      : 'Data não informada'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-200/50">
+                  <span className="text-slate-500">Servidor Chatwoot:</span>
+                  <span className="font-mono font-semibold text-slate-800 truncate max-w-[220px]">{backupPreview.chatwootUrl}</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-200/50">
+                  <span className="text-slate-500">Account ID:</span>
+                  <span className="font-mono font-semibold text-slate-800">{backupPreview.accountId}</span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-200/50">
+                  <span className="text-slate-500">Token de API:</span>
+                  <span className="font-semibold text-emerald-700">
+                    {backupPreview.hasToken ? '✓ Incluso e configurado' : 'Não incluso'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-200/50">
+                  <span className="text-slate-500">Total de Leads:</span>
+                  <span className="font-semibold text-slate-800">
+                    {backupPreview.totalLeads} ({backupPreview.convertedLeads} convertidos)
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-1">
+                  <span className="text-slate-500">Histórico de Investimentos:</span>
+                  <span className="font-semibold text-slate-800">{backupPreview.totalInvestments} registros</span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-[11px] leading-relaxed">
+                <strong>Atenção:</strong> A restauração irá atualizar a memória local e sincronizará imediatamente estes dados com o Cloud Firestore. O token de API será reconectado automaticamente ao Chatwoot.
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setIsRestoreModalOpen(false)}
+                disabled={isRestoringBackup}
+                className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmRestore}
+                disabled={isRestoringBackup}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#00375a] hover:bg-[#002139] text-white text-xs font-bold cursor-pointer transition-colors shadow-xs disabled:opacity-50"
+              >
+                {isRestoringBackup && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+                <span>{isRestoringBackup ? 'Restaurando...' : 'Confirmar e Restaurar'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

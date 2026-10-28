@@ -51,6 +51,9 @@ export interface LeadRecord {
   status: 'lead' | 'converted' | 'not_converted';
   has_confirmed_timestamp: boolean;
   chatwoot_url?: string;
+  manually_converted?: boolean;
+  manually_unconverted?: boolean;
+  manual_conversion_at?: string;
 }
 
 export interface InvestmentRecord {
@@ -164,3 +167,14 @@ export interface AnalyticsSummary {
   top_converting_channel: { name: string; rate: number };
   total_revenue_period: number;
 }
+
+export interface AppUser {
+  uid: string;
+  name: string;
+  email: string;
+  role: 'admin' | 'manager' | 'operator';
+  status: 'active' | 'inactive';
+  createdAt: string;
+  isMaster?: boolean;
+}
+

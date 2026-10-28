@@ -390,10 +390,17 @@ export const LeadsView: React.FC<LeadsViewProps> = ({
                       {/* Status */}
                       <td className="py-3.5 px-4">
                         {lead.status === 'converted' ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-[#c1ef6d]/40 text-emerald-900 border border-[#c1ef6d]">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
-                            Convertido
-                          </span>
+                          <div className="flex flex-col items-start gap-0.5">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-[#c1ef6d]/40 text-emerald-900 border border-[#c1ef6d]">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-600"></span>
+                              Convertido
+                            </span>
+                            {lead.manually_converted && (
+                              <span className="text-[10px] text-emerald-700 font-semibold pl-1">
+                                Manual • Fixado
+                              </span>
+                            )}
+                          </div>
                         ) : lead.status === 'not_converted' ? (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
                             <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span>

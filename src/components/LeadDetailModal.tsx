@@ -117,10 +117,17 @@ export const LeadDetailModal: React.FC<LeadDetailModalProps> = ({
               </span>
               <div className="mt-1">
                 {lead.status === 'converted' ? (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-[#c1ef6d]/40 text-emerald-900 border border-[#c1ef6d]">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
-                    Convertido (Ganhamos)
-                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-[#c1ef6d]/40 text-emerald-900 border border-[#c1ef6d]">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
+                      Convertido (Ganhamos)
+                    </span>
+                    {lead.manually_converted && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold border border-emerald-200">
+                        Manual • Protegido
+                      </span>
+                    )}
+                  </div>
                 ) : lead.status === 'not_converted' ? (
                   <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-200 text-slate-700">
                     Não Convertido

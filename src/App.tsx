@@ -7,15 +7,21 @@ import { ConversionsView } from './components/ConversionsView.tsx';
 import { InvestmentsView } from './components/InvestmentsView.tsx';
 import { ChannelsView } from './components/ChannelsView.tsx';
 import { ReportsView } from './components/ReportsView.tsx';
+import { UsersView } from './components/UsersView.tsx';
 import { SettingsView } from './components/SettingsView.tsx';
+import { LoginView } from './components/LoginView.tsx';
 import { LeadDetailModal } from './components/LeadDetailModal.tsx';
 import { NewLeadModal } from './components/NewLeadModal.tsx';
 import { 
   ChatwootConfig, 
   AnalyticsSummary, 
   LeadRecord, 
-  PeriodFilter 
+  PeriodFilter,
+  AppUser 
 } from './types.ts';
+import { auth, db } from './lib/firebase.ts';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { doc, getDoc } from 'firebase/firestore';
 import { CheckCircle2, AlertTriangle, Info, X } from 'lucide-react';
 
 export default function App() {
@@ -43,6 +49,58 @@ export default function App() {
   const [activeLeadModal, setActiveLeadModal] = useState<LeadRecord | null>(null);
   const [isNewLeadModalOpen, setIsNewLeadModalOpen] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+
+  // Authentication state
+  const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        try {
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          if (userDoc.exists()) {
+            setCurrentUser(userDoc.data() as AppUser);
+          } else {
+            const fallback: AppUser = {
+              uid: firebaseUser.uid,
+              name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Administrador',
+              email: firebaseUser.email || '',
+              role: 'admin',
+              status: 'active',
+              createdAt: new Date().toISOString()
+            };
+            setCurrentUser(fallback);
+          }
+        } catch (err) {
+          console.warn('Error fetching user profile:', err);
+          setCurrentUser({
+            uid: firebaseUser.uid,
+            name: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Administrador',
+            email: firebaseUser.email || '',
+            role: 'admin',
+            status: 'active',
+            createdAt: new Date().toISOString()
+          });
+        }
+      } else {
+        setCurrentUser(null);
+      }
+      setAuthLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      setCurrentUser(null);
+      showToast('info', 'Sessão encerrada com sucesso.');
+    } catch (err) {
+      console.error('Logout error:', err);
+    }
+  };
 
   const showToast = (type: 'success' | 'error' | 'info', message: string) => {
     setNotification({ type, message });
@@ -224,6 +282,13 @@ export default function App() {
     await loadLeads(1);
   };
 
+  const handleBackupRestored = async (message: string) => {
+    showToast('success', message || 'Backup restaurado com sucesso!');
+    await loadConfig();
+    await loadStats();
+    await loadLeads(1);
+  };
+
   const handleCreateLead = async (data: any) => {
     const res = await fetch('/api/leads/manual', {
       method: 'POST',
@@ -325,6 +390,20 @@ export default function App() {
     });
   };
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#002139] flex flex-col items-center justify-center text-white p-4">
+        <div className="w-9 h-9 border-3 border-white/20 border-t-[#c1ef6d] rounded-full animate-spin mb-4" />
+        <p className="text-sm font-bold text-white font-['Plus_Jakarta_Sans',sans-serif]">ChatAnalytics</p>
+        <p className="text-xs text-slate-400 mt-1">Carregando credenciais seguras...</p>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return <LoginView onSuccess={user => setCurrentUser(user)} />;
+  }
+
   return (
     <div className="flex min-h-screen bg-[#f8f9fc] text-slate-900 font-sans antialiased selection:bg-[#c1ef6d] selection:text-[#002139]">
       {/* Toast Notification */}
@@ -357,6 +436,8 @@ export default function App() {
         isSyncing={isSyncing}
         isOpenMobile={isMobileMenuOpen}
         onCloseMobile={() => setIsMobileMenuOpen(false)}
+        currentUser={currentUser}
+        onLogout={handleLogout}
       />
 
       {/* Main Workspace Canvas */}
@@ -454,6 +535,13 @@ export default function App() {
             />
           )}
 
+          {currentTab === 'users' && (
+            <UsersView
+              currentUser={currentUser}
+              showToast={showToast}
+            />
+          )}
+
           {currentTab === 'settings' && (
             <SettingsView
               config={config}
@@ -464,6 +552,7 @@ export default function App() {
               onClearDb={handleClearDb}
               onUpdateAutoSync={handleUpdateAutoSync}
               onUpdateAdSpend={handleUpdateAdSpend}
+              onBackupRestored={handleBackupRestored}
             />
           )}
         </main>

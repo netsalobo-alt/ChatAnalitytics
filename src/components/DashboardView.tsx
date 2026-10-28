@@ -43,6 +43,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [isEditingAdSpend, setIsEditingAdSpend] = useState(false);
   const [adSpendInput, setAdSpendInput] = useState('');
   const [isSavingAdSpend, setIsSavingAdSpend] = useState(false);
+  const [chartDaysRange, setChartDaysRange] = useState<7 | 14 | 30>(7);
 
   useEffect(() => {
     if (summary) {
@@ -78,9 +79,29 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   // Filter conversions from recent leads
   const recentConversions = recentLeads.filter(l => l.is_converted).slice(0, 5);
 
-  // Daily series dynamic values
-  const dailySeries = summary.daily_series || [];
+  // Daily series dynamic values - sliced to user selected window (7, 14 or 30 days)
+  const allDailySeries = summary.daily_series || [];
+  const dailySeries = allDailySeries.slice(-chartDaysRange);
   const maxDailyReceived = Math.max(1, ...dailySeries.map(d => d.leads_received));
+  const totalReceivedInRange = dailySeries.reduce((acc, d) => acc + d.leads_received, 0);
+  const totalConvertedInRange = dailySeries.reduce((acc, d) => acc + d.leads_converted, 0);
+
+  const getDayInfo = (dateStr: string, idx: number, total: number) => {
+    const isToday = idx === total - 1;
+    const isYesterday = idx === total - 2;
+    const [y, m, day] = dateStr.split('-').map(Number);
+    const dateObj = new Date(Date.UTC(y, m - 1, day, 12, 0, 0));
+    const weekDays = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+    const monthNames = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+    
+    return {
+      isToday,
+      isYesterday,
+      dayNum: String(day).padStart(2, '0'),
+      monthName: monthNames[m - 1],
+      weekday: weekDays[dateObj.getUTCDay()]
+    };
+  };
 
   // Weekly cohorts dynamic values
   const weeklyCohorts = summary.weekly_cohorts || [];
@@ -483,67 +504,220 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       {/* CHARTS BENTO GRID (2x2 DYNAMIC)            */}
       {/* ========================================== */}
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* CHART 1: Evolução Diária de Leads (Últimos 30 dias) */}
+        {/* CHART 1: Evolução Diária de Leads (Consolidada 1 barra por dia) */}
         <div className="bg-white p-6 rounded-2xl border border-slate-200/90 shadow-xs flex flex-col justify-between">
-          <div className="flex items-start justify-between mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-4">
             <div>
-              <h2 className="text-base font-bold text-[#002139]">
-                Evolução Diária de Leads (Últimos 30 dias)
-              </h2>
-              <p className="text-xs text-slate-500">
-                Volume real de contatos com a etiqueta trafego_pago
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-[#002139]">
+                  Evolução Diária de Leads (trafego_pago)
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-sky-50 text-sky-800 border border-sky-200">
+                  1 barra por dia
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Volume consolidado de contatos da etiqueta trafego_pago e conversões Ganhamos
               </p>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-slate-100 text-slate-700">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#00375a]"></span>
-                Leads Diários
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Range Toggle */}
+              <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                {( [7, 14, 30] as const ).map((range) => (
+                  <button
+                    key={range}
+                    type="button"
+                    onClick={() => setChartDaysRange(range)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-bold transition-all cursor-pointer ${
+                      chartDaysRange === range
+                        ? 'bg-[#00375a] text-white shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {range}d
+                  </button>
+                ))}
+              </div>
+
+              {/* Total pill */}
+              <span className="hidden md:inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-md bg-slate-100 text-slate-700">
+                Total: <strong>{totalReceivedInRange} leads</strong>
+                {totalConvertedInRange > 0 && (
+                  <span className="text-emerald-700 font-bold">({totalConvertedInRange} ganhos)</span>
+                )}
               </span>
             </div>
           </div>
 
-          {dailySeries.length === 0 || maxDailyReceived === 0 ? (
+          {/* Chart Legend */}
+          <div className="flex items-center gap-4 text-xs font-medium text-slate-600 mb-2 pb-2 border-b border-slate-100">
+            <div className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-xs bg-[#00375a]"></span>
+              <span>Leads Recebidos (trafego_pago)</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-3 h-3 rounded-xs bg-emerald-600"></span>
+              <span>Convertidos (Ganhamos)</span>
+            </div>
+          </div>
+
+          {dailySeries.length === 0 ? (
             <div className="h-64 flex flex-col items-center justify-center text-slate-400 gap-2 border border-dashed border-slate-200 rounded-xl">
               <Inbox className="w-8 h-8 stroke-1 text-slate-300" />
-              <span className="text-xs">Nenhum dado diário registrado no período.</span>
+              <span className="text-xs">Nenhum dado diário registrado no período selecionado.</span>
             </div>
           ) : (
-            <div className="w-full h-64 mt-2">
-              <div className="flex items-end justify-between h-48 gap-1 pt-6 px-2">
+            <div className="w-full mt-2">
+              {/* Bars Row */}
+              <div className="flex items-end justify-between h-48 gap-1 sm:gap-2 pt-6 px-1">
                 {dailySeries.map((d, idx) => {
-                  const heightPct = Math.max(4, Math.round((d.leads_received / maxDailyReceived) * 100));
+                  const dayInfo = getDayInfo(d.date, idx, dailySeries.length);
                   const isHovered = hoveredPoint === idx;
+                  const hasLeads = d.leads_received > 0;
+                  const heightPct = hasLeads 
+                    ? Math.max(14, Math.round((d.leads_received / maxDailyReceived) * 100))
+                    : 4;
+                  
+                  // Conversion percentage inside the bar
+                  const convertedPct = hasLeads 
+                    ? Math.round((d.leads_converted / d.leads_received) * 100) 
+                    : 0;
+                  const pendingPct = 100 - convertedPct;
 
                   return (
                     <div
-                      key={idx}
+                      key={d.date}
                       className="flex-1 flex flex-col items-center justify-end h-full relative group cursor-pointer"
                       onMouseEnter={() => setHoveredPoint(idx)}
                       onMouseLeave={() => setHoveredPoint(null)}
                     >
-                      {/* Tooltip */}
+                      {/* Rich Tooltip */}
                       {isHovered && (
-                        <div className="absolute -top-10 bg-[#002139] text-white text-[10px] rounded-lg px-2 py-1 shadow-lg whitespace-nowrap z-10 font-mono">
-                          {d.label}: {d.leads_received} leads ({d.leads_converted} ganhos)
+                        <div className="absolute -top-16 bg-[#002139] text-white text-[11px] rounded-xl px-3 py-2 shadow-xl whitespace-nowrap z-30 font-sans border border-white/10 pointer-events-none">
+                          <div className="font-bold text-slate-200 mb-0.5">
+                            {dayInfo.isToday ? 'Hoje' : dayInfo.isYesterday ? 'Ontem' : `${dayInfo.dayNum} ${dayInfo.monthName}`} • {d.date}
+                          </div>
+                          <div className="flex items-center gap-1.5 text-[#38bdf8] font-bold">
+                            <span>Total recebido: {d.leads_received} lead{d.leads_received !== 1 ? 's' : ''}</span>
+                          </div>
+                          {d.leads_converted > 0 && (
+                            <div className="flex items-center gap-1.5 text-emerald-400 font-bold">
+                              <span>Convertidos: {d.leads_converted} venda{d.leads_converted !== 1 ? 's' : ''} (Ganhamos)</span>
+                            </div>
+                          )}
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            Taxa de conversão: {d.conversion_rate}%
+                          </div>
                         </div>
                       )}
-                      <div
-                        className={`w-full rounded-xs transition-all ${
-                          d.leads_received > 0 
-                            ? (isHovered ? 'bg-[#1A94C5]' : 'bg-[#00375a]') 
+
+                      {/* Lead Count Badge above Bar */}
+                      <div className="mb-1.5 flex flex-col items-center">
+                        {hasLeads ? (
+                          <span className={`inline-flex items-center justify-center font-extrabold text-xs px-1.5 py-0.5 rounded-md tabular-nums transition-colors ${
+                            isHovered 
+                              ? 'bg-[#00375a] text-white shadow-xs' 
+                              : d.leads_converted > 0 
+                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                                : 'bg-slate-100 text-[#00375a]'
+                          }`}>
+                            {d.leads_received}
+                          </span>
+                        ) : (
+                          <span className="text-[10px] text-slate-300 font-mono">-</span>
+                        )}
+                      </div>
+
+                      {/* Single Consolidated Vertical Bar */}
+                      <div 
+                        className={`w-full max-w-[48px] rounded-t-md overflow-hidden flex flex-col justify-end transition-all ${
+                          hasLeads 
+                            ? isHovered 
+                              ? 'ring-2 ring-[#00375a] ring-offset-1 shadow-sm' 
+                              : '' 
                             : 'bg-slate-100'
                         }`}
                         style={{ height: `${heightPct}%` }}
-                      ></div>
+                      >
+                        {hasLeads ? (
+                          <div className="w-full h-full flex flex-col justify-end">
+                            {/* In-progress/Received segment (Blue) */}
+                            {pendingPct > 0 && (
+                              <div 
+                                className={`w-full transition-all ${isHovered ? 'bg-[#1A94C5]' : 'bg-[#00375a]'}`}
+                                style={{ height: `${pendingPct}%` }}
+                              ></div>
+                            )}
+                            {/* Converted segment (Emerald) */}
+                            {convertedPct > 0 && (
+                              <div 
+                                className="w-full bg-emerald-600 transition-all"
+                                style={{ height: `${convertedPct}%` }}
+                              ></div>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="w-full h-1 bg-slate-200 rounded-full"></div>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
               </div>
-              {/* X Axis */}
-              <div className="flex justify-between text-[10px] text-slate-400 pt-3 border-t border-slate-100 px-2">
-                <span>{dailySeries[0]?.label || ''}</span>
-                <span>{dailySeries[Math.floor(dailySeries.length / 2)]?.label || ''}</span>
-                <span className="font-bold text-[#00375a]">{dailySeries[dailySeries.length - 1]?.label || ''}</span>
+
+              {/* Explicit X-Axis Daily Labels (Each bar has its own explicit date label) */}
+              <div className="flex justify-between items-start pt-3 border-t border-slate-100 px-1 gap-1 sm:gap-2">
+                {dailySeries.map((d, idx) => {
+                  const dayInfo = getDayInfo(d.date, idx, dailySeries.length);
+                  const isHovered = hoveredPoint === idx;
+
+                  return (
+                    <div 
+                      key={d.date} 
+                      className="flex-1 flex flex-col items-center text-center cursor-pointer"
+                      onMouseEnter={() => setHoveredPoint(idx)}
+                      onMouseLeave={() => setHoveredPoint(null)}
+                    >
+                      {dayInfo.isToday ? (
+                        <div className="flex flex-col items-center">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-colors ${
+                            isHovered ? 'bg-[#1A94C5] text-white' : 'bg-[#00375a] text-white'
+                          }`}>
+                            Hoje
+                          </span>
+                          <span className="text-[10px] text-slate-500 font-semibold mt-0.5 tabular-nums">
+                            {dayInfo.dayNum}/{d.date.slice(5, 7)}
+                          </span>
+                        </div>
+                      ) : dayInfo.isYesterday ? (
+                        <div className="flex flex-col items-center">
+                          <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-colors ${
+                            isHovered ? 'bg-slate-300 text-slate-900' : 'bg-slate-200 text-slate-700'
+                          }`}>
+                            Ontem
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-medium mt-0.5 tabular-nums">
+                            {dayInfo.dayNum}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center">
+                          <span className={`text-[11px] font-bold transition-colors ${
+                            isHovered ? 'text-[#00375a]' : 'text-slate-700'
+                          }`}>
+                            {chartDaysRange === 30 ? dayInfo.dayNum : `${dayInfo.dayNum} ${dayInfo.monthName}`}
+                          </span>
+                          {chartDaysRange !== 30 && (
+                            <span className="text-[10px] text-slate-400 font-medium">
+                              {dayInfo.weekday}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

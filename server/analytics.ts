@@ -1,4 +1,4 @@
-import { 
+import type { 
   LeadRecord, 
   AnalyticsFilter, 
   AnalyticsSummary, 
@@ -11,19 +11,43 @@ import {
 } from './types.ts';
 
 // America/Belem is fixed at UTC-3 (no daylight saving time in Brazil since 2019)
-const BELEM_OFFSET_MS = -3 * 60 * 60 * 1000;
+export function getBelemDateStr(dateInput: Date | string | number = new Date()): string {
+  try {
+    let d: Date;
+    if (typeof dateInput === 'number') {
+      d = dateInput < 10000000000 ? new Date(dateInput * 1000) : new Date(dateInput);
+    } else if (typeof dateInput === 'string') {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(dateInput)) {
+        return dateInput;
+      }
+      d = new Date(dateInput);
+    } else {
+      d = dateInput;
+    }
 
-export function getBelemDate(dateInput: Date | string | number = new Date()): Date {
-  const d = typeof dateInput === 'string' || typeof dateInput === 'number' ? new Date(dateInput) : dateInput;
-  const utcMs = d.getTime() + (d.getTimezoneOffset() * 60000);
-  return new Date(utcMs + BELEM_OFFSET_MS);
+    if (isNaN(d.getTime())) {
+      d = new Date();
+    }
+
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Belem',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).format(d);
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
 }
 
 export function formatBelemDateStr(d: Date): string {
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return getBelemDateStr(d);
+}
+
+export function getBelemDate(dateInput: Date | string | number = new Date()): Date {
+  const str = getBelemDateStr(dateInput);
+  const [y, m, d] = str.split('-').map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0);
 }
 
 export interface DateRange {
@@ -32,60 +56,65 @@ export interface DateRange {
 }
 
 export function getDateRangeForPeriod(period: string, customStart?: string, customEnd?: string, referenceDate: Date = new Date()): DateRange {
-  const nowBelem = getBelemDate(referenceDate);
-  const curYear = nowBelem.getFullYear();
-  const curMonth = nowBelem.getMonth();
-  const curDay = nowBelem.getDate();
+  const belemStr = getBelemDateStr(referenceDate);
+  const [curYear, curMonth, curDay] = belemStr.split('-').map(Number);
+  const curMonthIdx = curMonth - 1;
 
-  function makeBelemDay(y: number, m: number, d: number, endOfDay = false): Date {
-    const date = new Date(Date.UTC(y, m, d, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0));
-    date.setUTCHours(date.getUTCHours() + 3);
-    return date;
+  function makeBelemDay(y: number, mIdx: number, d: number, endOfDay = false): Date {
+    // Belém is UTC-3.
+    // 00:00:00 Belém = 03:00:00 UTC on same calendar day
+    // 23:59:59.999 Belém = 02:59:59.999 UTC on next calendar day
+    if (endOfDay) {
+      return new Date(Date.UTC(y, mIdx, d + 1, 2, 59, 59, 999));
+    } else {
+      return new Date(Date.UTC(y, mIdx, d, 3, 0, 0, 0));
+    }
   }
 
   switch (period) {
     case 'today': {
-      const start = makeBelemDay(curYear, curMonth, curDay, false);
-      const end = makeBelemDay(curYear, curMonth, curDay, true);
+      const start = makeBelemDay(curYear, curMonthIdx, curDay, false);
+      const end = makeBelemDay(curYear, curMonthIdx, curDay, true);
       return { start, end };
     }
     case 'yesterday': {
-      const prev = new Date(nowBelem);
-      prev.setDate(prev.getDate() - 1);
-      const start = makeBelemDay(prev.getFullYear(), prev.getMonth(), prev.getDate(), false);
-      const end = makeBelemDay(prev.getFullYear(), prev.getMonth(), prev.getDate(), true);
+      const ref = new Date(Date.UTC(curYear, curMonthIdx, curDay, 12, 0, 0));
+      ref.setUTCDate(ref.getUTCDate() - 1);
+      const start = makeBelemDay(ref.getUTCFullYear(), ref.getUTCMonth(), ref.getUTCDate(), false);
+      const end = makeBelemDay(ref.getUTCFullYear(), ref.getUTCMonth(), ref.getUTCDate(), true);
       return { start, end };
     }
     case 'last_7_days': {
-      const prev7 = new Date(nowBelem);
-      prev7.setDate(prev7.getDate() - 6);
-      const start = makeBelemDay(prev7.getFullYear(), prev7.getMonth(), prev7.getDate(), false);
-      const end = makeBelemDay(curYear, curMonth, curDay, true);
+      const ref = new Date(Date.UTC(curYear, curMonthIdx, curDay, 12, 0, 0));
+      ref.setUTCDate(ref.getUTCDate() - 6);
+      const start = makeBelemDay(ref.getUTCFullYear(), ref.getUTCMonth(), ref.getUTCDate(), false);
+      const end = makeBelemDay(curYear, curMonthIdx, curDay, true);
       return { start, end };
     }
     case 'this_week': {
-      const dayOfWeek = nowBelem.getDay();
+      const ref = new Date(Date.UTC(curYear, curMonthIdx, curDay, 12, 0, 0));
+      const dayOfWeek = ref.getUTCDay();
       const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-      const monday = new Date(nowBelem);
-      monday.setDate(monday.getDate() + diffToMonday);
+      const monday = new Date(ref);
+      monday.setUTCDate(monday.getUTCDate() + diffToMonday);
       
       const sunday = new Date(monday);
-      sunday.setDate(sunday.getDate() + 6);
+      sunday.setUTCDate(sunday.getUTCDate() + 6);
       
-      const start = makeBelemDay(monday.getFullYear(), monday.getMonth(), monday.getDate(), false);
-      const end = makeBelemDay(sunday.getFullYear(), sunday.getMonth(), sunday.getDate(), true);
+      const start = makeBelemDay(monday.getUTCFullYear(), monday.getUTCMonth(), monday.getUTCDate(), false);
+      const end = makeBelemDay(sunday.getUTCFullYear(), sunday.getUTCMonth(), sunday.getUTCDate(), true);
       return { start, end };
     }
     case 'this_month': {
-      const start = makeBelemDay(curYear, curMonth, 1, false);
-      const lastDayOfMonth = new Date(curYear, curMonth + 1, 0).getDate();
-      const end = makeBelemDay(curYear, curMonth, lastDayOfMonth, true);
+      const start = makeBelemDay(curYear, curMonthIdx, 1, false);
+      const lastDayOfMonth = new Date(Date.UTC(curYear, curMonthIdx + 1, 0)).getUTCDate();
+      const end = makeBelemDay(curYear, curMonthIdx, lastDayOfMonth, true);
       return { start, end };
     }
     case 'last_month': {
-      const lastMonthYear = curMonth === 0 ? curYear - 1 : curYear;
-      const lastMonthIdx = curMonth === 0 ? 11 : curMonth - 1;
-      const lastDay = new Date(lastMonthYear, lastMonthIdx + 1, 0).getDate();
+      const lastMonthYear = curMonthIdx === 0 ? curYear - 1 : curYear;
+      const lastMonthIdx = curMonthIdx === 0 ? 11 : curMonthIdx - 1;
+      const lastDay = new Date(Date.UTC(lastMonthYear, lastMonthIdx + 1, 0)).getUTCDate();
       const start = makeBelemDay(lastMonthYear, lastMonthIdx, 1, false);
       const end = makeBelemDay(lastMonthYear, lastMonthIdx, lastDay, true);
       return { start, end };
@@ -103,8 +132,8 @@ export function getDateRangeForPeriod(period: string, customStart?: string, cust
         const end = makeBelemDay(eParts[0], eParts[1] - 1, eParts[2], true);
         return { start, end };
       }
-      const start = makeBelemDay(curYear, curMonth, 1, false);
-      const end = makeBelemDay(curYear, curMonth, curDay, true);
+      const start = makeBelemDay(curYear, curMonthIdx, 1, false);
+      const end = makeBelemDay(curYear, curMonthIdx, curDay, true);
       return { start, end };
     }
     case 'all':
@@ -123,7 +152,17 @@ export function computeAnalytics(
   allInvestments: InvestmentRecord[] = []
 ): AnalyticsSummary {
   // RULE 3 & 4: Only leads with 'trafego_pago' count as leads
-  const paidTrafficLeads = allLeads.filter(l => l.is_lead);
+  // Deduplicate by conversation ID to ensure no double-counting
+  const uniqueLeadsMap = new Map<string, LeadRecord>();
+  for (const lead of allLeads) {
+    if (!lead || !lead.is_lead) continue;
+    const key = `${lead.account_id || ''}_${lead.conversation_id || lead.id}`;
+    const existing = uniqueLeadsMap.get(key);
+    if (!existing || (!existing.is_converted && lead.is_converted)) {
+      uniqueLeadsMap.set(key, lead);
+    }
+  }
+  const paidTrafficLeads = Array.from(uniqueLeadsMap.values());
 
   const rangeToday = getDateRangeForPeriod('today');
   const rangeYesterday = getDateRangeForPeriod('yesterday');
@@ -259,19 +298,31 @@ export function computeAnalytics(
   const daysCount = 30;
   const monthNamesPt = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
   
+  // Group all leads by their Belém civil date string (YYYY-MM-DD)
+  const leadsByBelemDate = new Map<string, LeadRecord[]>();
+  for (const lead of paidTrafficLeads) {
+    const lDateStr = getBelemDateStr(lead.entry_date);
+    if (!leadsByBelemDate.has(lDateStr)) {
+      leadsByBelemDate.set(lDateStr, []);
+    }
+    leadsByBelemDate.get(lDateStr)!.push(lead);
+  }
+
+  const todayStr = getBelemDateStr();
+  const [tY, tM, tD] = todayStr.split('-').map(Number);
+
   for (let i = daysCount - 1; i >= 0; i--) {
-    const targetDate = new Date(nowBelem);
-    targetDate.setDate(targetDate.getDate() - i);
-    const dateStr = formatBelemDateStr(targetDate);
-    const dayNum = String(targetDate.getDate()).padStart(2, '0');
-    const monName = monthNamesPt[targetDate.getMonth()];
-    const label = `${dayNum} ${monName}`;
+    const d = new Date(Date.UTC(tY, tM - 1, tD, 12, 0, 0));
+    d.setUTCDate(d.getUTCDate() - i);
+    
+    const yearStr = d.getUTCFullYear();
+    const monthNum = d.getUTCMonth();
+    const dayNum = d.getUTCDate();
+    const dateStr = `${yearStr}-${String(monthNum + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+    const label = `${String(dayNum).padStart(2, '0')} ${monthNamesPt[monthNum]}`;
 
-    const dayLeads = paidTrafficLeads.filter(l => {
-      const lDate = getBelemDate(new Date(l.entry_date));
-      return formatBelemDateStr(lDate) === dateStr;
-    });
-
+    // Consolidate ALL leads on this EXACT day into one single day object
+    const dayLeads = leadsByBelemDate.get(dateStr) || [];
     const received = dayLeads.length;
     const converted = dayLeads.filter(l => l.is_converted).length;
     const rate = received > 0 ? Number(((converted / received) * 100).toFixed(1)) : 0;

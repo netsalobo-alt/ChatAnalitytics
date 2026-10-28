@@ -18,6 +18,8 @@ export interface ChatwootConfig {
     message: string;
   };
   ad_spend?: number; // Total amount invested in paid traffic (in BRL)
+  has_master_user?: boolean;
+  master_user_email?: string;
 }
 
 export interface ChatwootInbox {
@@ -51,6 +53,9 @@ export interface LeadRecord {
   status: 'lead' | 'converted' | 'not_converted';
   has_confirmed_timestamp: boolean; // flag if date was confirmed or first observed
   chatwoot_url?: string;
+  manually_converted?: boolean;
+  manually_unconverted?: boolean;
+  manual_conversion_at?: string;
 }
 
 export interface InvestmentRecord {
@@ -180,3 +185,6 @@ export interface AnalyticsSummary {
   top_converting_channel: { name: string; rate: number };
   total_revenue_period: number;
 }
+
+export const TYPES_LOADED = true;
+

@@ -1,4 +1,6 @@
-import express, { Request, Response } from 'express';
+import express from 'express';
+import type { Request, Response } from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
@@ -15,18 +17,24 @@ import {
   getAllInvestments,
   addInvestment,
   updateInvestment,
-  deleteInvestment
+  deleteInvestment,
+  getMasterStatus,
+  setMasterUser,
+  initPersistentStorage,
+  generateBackup,
+  restoreBackup
 } from './server/storage.ts';
 import { 
   testChatwootConnection, 
   syncChatwootHistory, 
-  handleChatwootWebhook 
+  handleChatwootWebhook,
+  updateChatwootConversationLabels
 } from './server/chatwoot.ts';
 import { 
   computeAnalytics, 
   getDateRangeForPeriod 
 } from './server/analytics.ts';
-import { AnalyticsFilter, PeriodFilter, LeadRecord } from './server/types.ts';
+import type { AnalyticsFilter, PeriodFilter, LeadRecord } from './server/types.ts';
 
 dotenv.config();
 
@@ -34,7 +42,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
+const PORT = parseInt(process.env.PORT || '3000', 10) || 3000;
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
@@ -54,6 +62,22 @@ app.get('/api/config', (_req: Request, res: Response) => {
     ...sanitized,
     webhook_url: webhookUrl
   });
+});
+
+// Master User status & lock
+app.get('/api/auth/status', (_req: Request, res: Response) => {
+  const status = getMasterStatus();
+  res.json(status);
+});
+
+app.post('/api/auth/set-master', (req: Request, res: Response) => {
+  const { email } = req.body;
+  if (!email) {
+    res.status(400).json({ error: 'E-mail do administrador master obrigatório.' });
+    return;
+  }
+  const result = setMasterUser(email);
+  res.json(result);
 });
 
 app.post('/api/config', (req: Request, res: Response) => {
@@ -191,6 +215,63 @@ app.delete('/api/investments/:id', (req: Request, res: Response) => {
     success: true,
     message: 'Lançamento de investimento removido com sucesso.'
   });
+});
+
+// ==========================================
+// BACKUP EXPORT & RESTORE ENDPOINTS
+// ==========================================
+app.get('/api/backup/export', (_req: Request, res: Response) => {
+  try {
+    const backup = generateBackup();
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const timeStr = new Date().toISOString().slice(11, 16).replace(':', '');
+    const filename = `chatanalytics-backup-${dateStr}-${timeStr}.json`;
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(JSON.stringify(backup, null, 2));
+  } catch (err: any) {
+    res.status(500).json({ error: `Falha ao gerar arquivo de backup: ${err.message}` });
+  }
+});
+
+app.post('/api/backup/import', async (req: Request, res: Response) => {
+  try {
+    const payload = req.body;
+    if (!payload || typeof payload !== 'object') {
+      res.status(400).json({ error: 'Conteúdo de backup inválido.' });
+      return;
+    }
+
+    const result = await restoreBackup(payload);
+
+    // If config has credentials, test/reconnect in background
+    if (result.config.api_token && result.config.account_id && result.config.chatwoot_url) {
+      testChatwootConnection(
+        result.config.chatwoot_url,
+        result.config.account_id,
+        result.config.api_token
+      ).then(testRes => {
+        if (testRes.success) {
+          saveConfig({
+            connected: true,
+            inboxes: testRes.inboxes || result.config.inboxes,
+            last_error_message: undefined
+          });
+        }
+      }).catch(e => console.warn('[Backup] Reconnection test error:', e));
+    }
+
+    res.json({
+      success: true,
+      message: result.message,
+      leads_restored: result.leads_restored,
+      investments_restored: result.investments_restored,
+      config: getSanitizedConfig()
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: `Falha ao restaurar backup: ${err.message}` });
+  }
 });
 
 app.post('/api/test-connection', async (req: Request, res: Response) => {
@@ -498,6 +579,19 @@ app.post('/api/leads/:id/toggle-conversion', (req: Request, res: Response) => {
     res.status(404).json({ error: 'Lead não encontrado.' });
     return;
   }
+
+  // Attempt to synchronize updated tags back to Chatwoot in background if configured
+  const config = getConfig();
+  if (config.api_token && config.account_id && config.chatwoot_url && updated.conversation_id) {
+    updateChatwootConversationLabels(
+      config.chatwoot_url,
+      config.account_id,
+      config.api_token,
+      updated.conversation_id,
+      updated.tags
+    ).catch(err => console.warn(`[SyncLabels] Falha ao atualizar etiquetas na conversa ${updated.conversation_id}:`, err));
+  }
+
   res.json({ success: true, lead: updated });
 });
 
@@ -679,28 +773,312 @@ app.get('/api/export/csv', (req: Request, res: Response) => {
   res.send(csvContent);
 });
 
+// 8.1 Printable Executive Report (HTML for printing and PDF saving)
+app.get('/api/export/printable-report', (req: Request, res: Response) => {
+  const allLeads = getAllLeads();
+  const allInvestments = getAllInvestments();
+  const filter: AnalyticsFilter = {
+    period: (req.query.period as PeriodFilter) || 'this_month',
+    startDate: req.query.startDate as string,
+    endDate: req.query.endDate as string,
+    channel: req.query.channel as string,
+    inboxId: req.query.inboxId ? Number(req.query.inboxId) : undefined,
+    status: (req.query.status as any) || 'all',
+    search: req.query.search as string
+  };
+
+  const config = getConfig();
+  const summary = computeAnalytics(allLeads, filter, config.ad_spend || 0, allInvestments);
+  const nowStr = new Date().toLocaleString('pt-BR', { timeZone: 'America/Belem' });
+
+  const html = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Relatório Executivo Oficial - ChatAnalytics</title>
+  <style>
+    @page { size: A4 portrait; margin: 12mm; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #002139;
+      background: #ffffff;
+      margin: 0;
+      padding: 24px;
+      line-height: 1.4;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .header {
+      border-bottom: 2px solid #002139;
+      padding-bottom: 16px;
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+    .badge {
+      display: inline-block;
+      background: #002139;
+      color: #c1ef6d;
+      font-weight: 800;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    h1 {
+      margin: 8px 0 4px 0;
+      font-size: 22px;
+      color: #002139;
+    }
+    .meta { color: #64748b; font-size: 12px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .card {
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px;
+      background: #f8fafc;
+    }
+    .card-label {
+      font-size: 10px;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: #64748b;
+    }
+    .card-value {
+      font-size: 20px;
+      font-weight: 800;
+      color: #002139;
+      margin-top: 4px;
+    }
+    .card-sub { font-size: 11px; color: #059669; font-weight: 600; margin-top: 2px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 24px;
+      font-size: 12px;
+    }
+    th {
+      background: #f1f5f9;
+      color: #475569;
+      text-align: left;
+      padding: 8px 12px;
+      font-weight: 700;
+      border-bottom: 1px solid #cbd5e1;
+      text-transform: uppercase;
+      font-size: 10px;
+    }
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .text-right { text-align: right; }
+    .font-bold { font-weight: 700; }
+    .footer {
+      border-top: 1px solid #e2e8f0;
+      padding-top: 12px;
+      font-size: 11px;
+      color: #94a3b8;
+      display: flex;
+      justify-content: space-between;
+    }
+    .print-bar {
+      background: #002139;
+      color: #ffffff;
+      padding: 12px 20px;
+      border-radius: 8px;
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .print-btn {
+      background: #c1ef6d;
+      color: #002139;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      font-weight: 700;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    @media print {
+      .print-bar { display: none; }
+      body { padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="print-bar">
+    <div>
+      <strong>Visualização de Impressão Oficial</strong>
+      <div style="font-size: 11px; opacity: 0.85;">Para salvar em PDF, escolha "Salvar como PDF" no destino da impressora.</div>
+    </div>
+    <button class="print-btn" onclick="window.print()">Imprimir / Salvar em PDF</button>
+  </div>
+
+  <div class="header">
+    <div>
+      <span class="badge">ChatAnalytics • Documento Oficial</span>
+      <h1>Relatório Executivo de Performance Comercial & Mídia</h1>
+      <div class="meta">
+        Filtro: <strong>${filter.period}</strong> • Emitido em: ${nowStr} (Horário Oficial de Belém - America/Belem)
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Leads (trafego_pago)</div>
+      <div class="card-value">${summary.filtered_leads_total.toLocaleString('pt-BR')}</div>
+      <div class="card-sub">Base filtrada</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Clientes Ganhos</div>
+      <div class="card-value" style="color: #059669;">${summary.filtered_leads_converted.toLocaleString('pt-BR')}</div>
+      <div class="card-sub">Taxa: ${summary.filtered_conversion_rate}%</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Investimento em Tráfego</div>
+      <div class="card-value">R$ ${(summary.ad_spend || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+      <div class="card-sub">CPL: R$ ${(summary.cost_per_lead || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">CAC (Custo de Aquisição)</div>
+      <div class="card-value" style="color: #059669;">R$ ${(summary.cac || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</div>
+      <div class="card-sub">ROAS: ${summary.roas || 0}x</div>
+    </div>
+  </div>
+
+  <h3 style="font-size: 13px; color: #002139; margin-bottom: 8px;">Consolidação Mensal: Investimento, Leads, CAC e Receita</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Mês</th>
+        <th class="text-right">Investimento (R$)</th>
+        <th class="text-right">Leads</th>
+        <th class="text-right">Ganhos</th>
+        <th class="text-right">Taxa Conv.</th>
+        <th class="text-right">CPL</th>
+        <th class="text-right">CAC</th>
+        <th class="text-right">Receita (R$)</th>
+        <th class="text-right">ROAS</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${summary.monthly_performance.map(m => `
+        <tr>
+          <td class="font-bold">${m.month_label}</td>
+          <td class="text-right">R$ ${m.ad_spend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+          <td class="text-right">${m.leads_count}</td>
+          <td class="text-right font-bold" style="color: #059669;">${m.conversions_count}</td>
+          <td class="text-right">${m.conversion_rate}%</td>
+          <td class="text-right">R$ ${m.cpl.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+          <td class="text-right font-bold" style="color: #059669;">R$ ${m.cac.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+          <td class="text-right">R$ ${m.revenue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+          <td class="text-right font-bold">${m.roas}x</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+
+  <h3 style="font-size: 13px; color: #002139; margin-bottom: 8px;">Distribuição por Canais de Atendimento</h3>
+  <table>
+    <thead>
+      <tr>
+        <th>Canal</th>
+        <th class="text-right">Leads Recebidos</th>
+        <th class="text-right">Convertidos (Ganhamos)</th>
+        <th class="text-right">Taxa Conversão</th>
+        <th class="text-right">Participação</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${summary.channel_distribution.map(ch => `
+        <tr>
+          <td class="font-bold">${ch.channel_detail || ch.channel}</td>
+          <td class="text-right">${ch.leads_received.toLocaleString('pt-BR')}</td>
+          <td class="text-right font-bold" style="color: #059669;">${ch.leads_converted.toLocaleString('pt-BR')}</td>
+          <td class="text-right font-bold" style="color: #059669;">${ch.conversion_rate}%</td>
+          <td class="text-right">${ch.share_percentage}%</td>
+        </tr>
+      `).join('')}
+    </tbody>
+  </table>
+
+  <div class="footer">
+    <span>ChatAnalytics • Plataforma Integrada de Performance</span>
+    <span>Rastreamento Oficial Chatwoot V3 • tag trafego_pago</span>
+  </div>
+
+  <script>
+    window.addEventListener('DOMContentLoaded', function() {
+      setTimeout(function() { window.print(); }, 400);
+    });
+  </script>
+</body>
+</html>`;
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
+
 // ==========================================
 // VITE DEV SERVER OR STATIC PRODUCTION
 // ==========================================
 async function startServer() {
-  if (process.env.NODE_ENV !== 'production') {
-    const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
+  try {
+    await initPersistentStorage();
+  } catch (e: any) {
+    console.warn('[ServerBoot] Falha ao carregar armazenamento persistente:', e.message);
+  }
+
+  const distPath = path.resolve(__dirname, 'dist');
+  const hasDistIndex = fs.existsSync(path.resolve(distPath, 'index.html'));
+  const isProduction = process.env.NODE_ENV === 'production' || hasDistIndex;
+
+  if (!isProduction) {
+    try {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } catch (err) {
+      console.warn('Vite dev middleware could not be loaded, running in API mode:', err);
+    }
   } else {
-    const distPath = path.resolve(__dirname, 'dist');
-    app.use(express.static(distPath));
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+    }
     app.get('*', (_req: Request, res: Response) => {
-      res.sendFile(path.resolve(distPath, 'index.html'));
+      const indexPath = path.resolve(distPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        res.sendFile(indexPath);
+      } else {
+        res.status(200).send('ChatAnalytics server is running.');
+      }
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
+  const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`ChatAnalytics server running on http://0.0.0.0:${PORT}`);
-    initAutoSyncScheduler();
+    try {
+      initAutoSyncScheduler();
+    } catch (e) {
+      console.warn('Auto sync scheduler failed to initialize:', e);
+    }
+  });
+
+  server.on('error', (err: any) => {
+    console.error('Server listen error:', err);
   });
 }
 

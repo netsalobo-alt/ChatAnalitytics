@@ -1,4 +1,4 @@
-import { ChatwootInbox, LeadRecord } from './types.ts';
+import type { ChatwootInbox, LeadRecord } from './types.ts';
 import { upsertLead, bulkUpsertLeads, getAllLeads } from './storage.ts';
 
 export interface ChatwootConnectionResult {
@@ -81,6 +81,36 @@ export async function testChatwootConnection(
       message: `Não foi possível conectar ao servidor Chatwoot: ${error.message}`,
       latency_ms: Date.now() - startTime
     };
+  }
+}
+
+/**
+ * Pushes updated labels directly to a Chatwoot conversation.
+ * Ensures that manual conversions marked in ChatAnalytics (e.g. 'Ganhamos')
+ * are also synchronized back to the Chatwoot interface.
+ */
+export async function updateChatwootConversationLabels(
+  baseUrl: string,
+  accountId: string,
+  apiToken: string,
+  conversationId: number,
+  labels: string[]
+): Promise<boolean> {
+  const cleanUrl = baseUrl.replace(/\/+$/, '');
+  const url = `${cleanUrl}/api/v1/accounts/${accountId}/conversations/${conversationId}/labels`;
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'api_access_token': apiToken,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ labels })
+    });
+    return res.ok;
+  } catch (e: any) {
+    console.warn(`[Chatwoot] Não foi possível atualizar etiquetas na conversa ${conversationId}:`, e.message);
+    return false;
   }
 }
 
@@ -232,14 +262,14 @@ export async function syncChatwootHistory(
     const collectedLeads = Array.from(leadsMap.values());
 
     if (collectedLeads.length > 0) {
-      const { added, updated } = bulkUpsertLeads(collectedLeads);
+      const { added, updated, totalConverted } = bulkUpsertLeads(collectedLeads);
       return {
         success: true,
         total_synced: collectedLeads.length,
         paid_leads_found: paidLeadsFound,
         ganhamos_found: ganhamosFound,
-        conversions_updated: conversionsUpdated,
-        message: `Sincronização concluída: ${collectedLeads.length} leads de tráfego pago auditados (${conversionsUpdated} convertidos com 'Ganhamos').`
+        conversions_updated: totalConverted,
+        message: `Sincronização concluída: ${collectedLeads.length} leads de tráfego pago auditados (${totalConverted} convertidos com 'Ganhamos'). Conversões manuais preservadas.`
       };
     } else {
       return {

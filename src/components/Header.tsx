@@ -69,6 +69,11 @@ const TAB_TITLES: Record<NavTab, { title: string; subtitle: string; tag: string 
     subtitle: 'Consolidação periódica de indicadores, métricas e exportações oficiais',
     tag: 'Fuso: America/Belem'
   },
+  users: {
+    title: 'Gestão de Usuários da Equipe',
+    subtitle: 'Controle de acesso, cadastro de operadores e permissões no ChatAnalytics',
+    tag: 'Autenticação & Permissões'
+  },
   settings: {
     title: 'Configurações da Integração',
     subtitle: 'Conexão segura com a API do Chatwoot, credenciais, webhooks e parâmetros',
