@@ -14,8 +14,8 @@ ENV PORT=3000
 # Copia arquivos de dependências
 COPY package*.json ./
 
-# Instala todas as dependências (incluindo build tools)
-RUN npm install
+# Instala todas as dependências (com --legacy-peer-deps para evitar conflitos de peer)
+RUN npm install --legacy-peer-deps
 
 # Copia todo o código fonte
 COPY . .
